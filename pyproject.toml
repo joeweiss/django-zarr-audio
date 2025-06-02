@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "django-zarr-audio"
+version = "0.1.0"
+description = "Reusable Django app for working with audio and Zarr"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+authors = [{name = "Joe Weiss", email = "joe.weiss@gmail.com"}]
+dependencies = ["Django >=3.2", "zarr-audio"]
+classifiers = [
+    "Framework :: Django",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.optional-dependencies]
+dev = [
+    "tox",
+    "pytest",
+    "pytest-django",
+    "black",
+    "isort",
+    "mypy",
+    "watchdog"
+]
+
+
+
+[project.urls]
+Homepage = "https://github.com/joeweiss/django-zarr-audio"
+Repository = "https://github.com/joeweiss/django-zarr-audio"
+
+[tool.setuptools]
+packages = ["django_zarr_audio"]
+
+[tool.setuptools.package-data]
+"django_zarr_audio" = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = {attr = "django_zarr_audio.__version__"}
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+
+[tool.mypy]
+plugins = ["mypy_django_plugin.main"]
+
+[tool.django-stubs]
+django_settings_module = "example_project.settings"
+

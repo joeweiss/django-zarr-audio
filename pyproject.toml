@@ -14,7 +14,7 @@ dependencies = ["Django >=4.2", "zarr-audio"]
 classifiers = [
     "Framework :: Django",
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
 ]
 
 [project.optional-dependencies]

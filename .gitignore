@@ -188,3 +188,4 @@ cython_debug/
 
 .python-version
 .DS_Store
+.autoenv

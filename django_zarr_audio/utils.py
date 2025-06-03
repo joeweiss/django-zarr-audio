@@ -2,10 +2,11 @@ import os
 from pathlib import PurePosixPath
 
 from fsspec.utils import infer_storage_options
+from typing import Optional
 from .models import StorageMapping
 
 
-def get_storage_mapping_for_uri(uri: str) -> StorageMapping | None:
+def get_storage_mapping_for_uri(uri: str) -> Optional[StorageMapping]:
     """
     Return the StorageMapping whose input_prefix matches the given URI.
     Chooses the longest matching prefix if multiple apply.

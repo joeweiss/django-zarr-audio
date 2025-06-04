@@ -41,17 +41,8 @@ Homepage = "https://github.com/joeweiss/django-zarr-audio"
 Repository = "https://github.com/joeweiss/django-zarr-audio"
 
 [tool.setuptools]
-include-package-data = true
 packages = ["django_zarr_audio"]
-
-[tool.setuptools.package-data]
-"django_zarr_audio" = [
-  "py.typed",
-  "migrations/*.py",
-  "templates/**/*",
-  "static/**/*",
-  "locale/**/*"
-]
+include-package-data = true
 
 [tool.setuptools.dynamic]
 version = {attr = "django_zarr_audio.__version__"}
@@ -67,4 +58,3 @@ plugins = ["mypy_django_plugin.main"]
 
 [tool.django-stubs]
 django_settings_module = "example_project.settings"
-

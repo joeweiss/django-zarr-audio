@@ -1,1 +1,5 @@
 include README.md LICENSE
+recursive-include django_zarr_audio/migrations *.py
+recursive-include django_zarr_audio/templates *
+recursive-include django_zarr_audio/static *
+include django_zarr_audio/py.typed

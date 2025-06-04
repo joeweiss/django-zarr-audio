@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>fsspec File Browser</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      font-size: 1.1rem;
+      line-height: 1.6;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+      background-color: #f9f9f9;
+      color: #222;
+    }
+
+    h1, h2, h3 {
+      margin-top: 2rem;
+      font-weight: 600;
+    }
+
+    form {
+      background: #fff;
+      padding: 1.5rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+      margin-bottom: 2rem;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 1rem;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      padding: 0.5rem;
+      font-size: 1rem;
+      margin-top: 0.25rem;
+      box-sizing: border-box;
+    }
+
+    input[type="checkbox"] {
+      margin-right: 0.5rem;
+    }
+
+    button {
+      padding: 0.6rem 1.2rem;
+      font-size: 1rem;
+      background-color: #0366d6;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #024caa;
+    }
+
+    ul {
+      padding-left: 1.25rem;
+    }
+
+    li {
+      margin-bottom: 0.5rem;
+    }
+
+    a {
+      color: #0366d6;
+      word-break: break-all;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .error {
+      color: #b00020;
+      font-weight: 500;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>fsspec File Browser</h1>
+
+  <form method="post">
+    {% csrf_token %}
+    <label>
+      URI:
+      <input type="text" name="uri" value="{{ uri }}">
+    </label>
+    <label>
+      Extensions (comma-separated):
+      <input type="text" name="extensions" value="{{ extensions|default:default_extensions }}">
+    </label>
+    <label>
+      <input type="checkbox" name="recursive" {% if recursive %}checked{% endif %}>
+      Recursively search subdirectories
+    </label>
+    <button type="submit">List Files</button>
+  </form>
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% if files %}
+    <h2>Matched Files ({{ files|length }})</h2>
+    <ul>
+      {% for file in files %}
+        <li>
+          <a href="{% url 'zap:audio-proxy' %}?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+            {{ file }}
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% elif files is not none %}
+    <p>No files found with specified extension(s).</p>
+  {% endif %}
+
+  {% if is_truncated %}
+    <p style="color: #999;">Showing first {{ files|length }} files (limit reached).</p>
+  {% endif %}
+
+
+</body>
+</html>

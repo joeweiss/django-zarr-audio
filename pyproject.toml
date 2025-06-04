@@ -4,13 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-zarr-audio"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reusable Django app for working with audio and Zarr"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}
 authors = [{name = "Joe Weiss", email = "joe.weiss@gmail.com"}]
-dependencies = ["Django >=4.2", "zarr-audio"]
+dependencies = [
+    "Django >=4.2",
+    "zarr-audio",
+    "django-model-utils",
+    "huey"
+]
+
 classifiers = [
     "Framework :: Django",
     "Programming Language :: Python :: 3",
@@ -25,10 +31,10 @@ dev = [
     "black",
     "isort",
     "mypy",
-    "watchdog"
+    "watchdog",
+    "boto3",
+    "dotenv",
 ]
-
-
 
 [project.urls]
 Homepage = "https://github.com/joeweiss/django-zarr-audio"

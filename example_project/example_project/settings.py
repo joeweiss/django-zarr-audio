@@ -1,4 +1,8 @@
 import os
+from huey import MemoryHuey
+
+HUEY = MemoryHuey()
+
 
 SECRET_KEY = "dev"
 DEBUG = True

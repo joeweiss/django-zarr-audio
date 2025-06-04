@@ -189,3 +189,4 @@ cython_debug/
 .python-version
 .DS_Store
 .autoenv
+tests/test_audio_proxy_view.py

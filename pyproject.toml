@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-zarr-audio"
-version = "0.2.1"
+version = "0.2.2"
 description = "Reusable Django app for working with audio and Zarr"
 readme = "README.md"
 requires-python = ">=3.8"

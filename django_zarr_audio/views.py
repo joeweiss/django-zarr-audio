@@ -230,7 +230,11 @@ def list_fsspec_files_view(request):
 
         all_files = fs.glob(pattern)
 
-        protocol = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
+        raw_protocol = fs.protocol
+        if isinstance(raw_protocol, (tuple, list)):
+            protocol = raw_protocol[0]
+        else:
+            protocol = raw_protocol
 
         matched_files = []
 

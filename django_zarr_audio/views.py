@@ -1,15 +1,19 @@
+import os
 import tempfile
-from django.http import FileResponse, HttpResponse, HttpResponseBadRequest
-from django.views.decorators.http import require_GET
-from django.conf import settings
+from urllib.parse import urlparse
 
-from .models import AudioFile, StorageMapping
-from .credentials import get_fs_from_env
-from .tasks import run_zarr_encoding
-from .utils import get_output_uri, get_storage_mapping_for_uri
+from django.conf import settings
+from django.http import FileResponse, HttpResponse, HttpResponseBadRequest, Http404
+from django.shortcuts import render
+from django.views.decorators.http import require_GET
 from zarr_audio.encoder import AudioEncoder
 from zarr_audio.reader import AudioReader
-import os
+
+from .credentials import get_fs_from_env
+from .models import AudioFile, StorageMapping
+from .tasks import run_zarr_encoding
+from .utils import get_output_uri, get_storage_mapping_for_uri
+from django.contrib.auth.decorators import login_required
 
 
 def health_check(request):
@@ -153,3 +157,126 @@ def audio_proxy_view(request):
         raise e
 
     return DeletingFileResponse(tmp_file, content_type="audio/flac")
+
+
+@login_required
+def list_fsspec_files_view(request):
+    if not getattr(settings, "DJZA_ENABLE_LISTING_VIEW", False):
+        raise Http404("Listing view is disabled.")
+    default_extensions = "wav,flac"
+
+    if request.method == "GET":
+        return render(
+            request,
+            "django_zarr_audio/list_fsspec_files.html",
+            {
+                "default_extensions": default_extensions,
+            },
+        )
+
+    uri = request.POST.get("uri")
+    extensions_input = request.POST.get("extensions", default_extensions)
+    recursive = request.POST.get("recursive") == "on"
+
+    if not uri:
+        return HttpResponseBadRequest("Missing URI.")
+
+    extensions = {
+        (
+            ext.strip().lower()
+            if ext.strip().startswith(".")
+            else f".{ext.strip().lower()}"
+        )
+        for ext in extensions_input.split(",")
+        if ext.strip()
+    }
+
+    try:
+        mapping = next(
+            m
+            for m in StorageMapping.objects.select_related("input_profile")
+            if uri.startswith(m.input_prefix)
+        )
+    except StopIteration:
+        return render(
+            request,
+            "django_zarr_audio/list_fsspec_files.html",
+            {
+                "error": "No matching StorageMapping found for the provided URI.",
+                "uri": uri,
+                "extensions": extensions_input,
+                "recursive": recursive,
+                "default_extensions": default_extensions,
+            },
+        )
+
+    try:
+        fs = get_fs_from_env(
+            label=mapping.input_profile.credentials_label,
+            backend=mapping.input_profile.backend,
+        )
+
+        if not uri.startswith(mapping.input_prefix):
+            raise ValueError("Provided URI is outside the mapped input_prefix")
+
+        # Reject potentially unsafe path traversal attempts
+        parsed = urlparse(uri)
+        if ".." in parsed.path.split("/"):
+            raise ValueError("Unsafe path: '..' not allowed in URI")
+
+        # Normalize and glob
+        normalized_uri = uri.rstrip("/")
+        pattern = f"{normalized_uri}/**/*" if recursive else f"{normalized_uri}/*"
+
+        all_files = fs.glob(pattern)
+
+        protocol = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
+
+        matched_files = []
+
+        for f in all_files:
+            if protocol == "file":
+                # Ensure correct triple-slash form
+                full_uri = f"file://{f}" if f.startswith("/") else f"file:///{f}"
+            else:
+                full_uri = f"{protocol}://{f}"
+
+            if uri.startswith(mapping.input_prefix) and full_uri.lower().endswith(
+                tuple(extensions)
+            ):
+                matched_files.append(full_uri)
+
+        matched_files.sort()
+
+        MAX_FILES = getattr(settings, "DJZA_MAX_LISTED_FILES", 200)
+
+        is_truncated = False
+        if MAX_FILES is not None and len(matched_files) > MAX_FILES:
+            is_truncated = True
+            matched_files = matched_files[:MAX_FILES]
+
+    except Exception as e:
+        return render(
+            request,
+            "django_zarr_audio/list_fsspec_files.html",
+            {
+                "error": f"Error accessing files: {e}",
+                "uri": uri,
+                "extensions": extensions_input,
+                "recursive": recursive,
+                "default_extensions": default_extensions,
+            },
+        )
+
+    return render(
+        request,
+        "django_zarr_audio/list_fsspec_files.html",
+        {
+            "files": matched_files,
+            "uri": uri,
+            "extensions": extensions_input,
+            "recursive": recursive,
+            "default_extensions": default_extensions,
+            "is_truncated": is_truncated,
+        },
+    )

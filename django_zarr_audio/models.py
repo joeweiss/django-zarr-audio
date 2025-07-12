@@ -97,3 +97,6 @@ class AudioFile(TimeStampedModel, StatusModel):
 
     def __str__(self):
         return self.uri
+
+    class Meta:
+        unique_together = (("uri", "storage_mapping"),)

@@ -1,9 +1,17 @@
+import io
 import os
 import tempfile
 from urllib.parse import urlparse
 
+import librosa
+
+
+import numpy as np
+import soundfile as sf
 from django.conf import settings
-from django.http import FileResponse, HttpResponse, HttpResponseBadRequest, Http404
+from django.contrib.auth.decorators import login_required
+from django.db import transaction
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import render
 from django.views.decorators.http import require_GET
 from zarr_audio.encoder import AudioEncoder
@@ -13,7 +21,12 @@ from .credentials import get_fs_from_env
 from .models import AudioFile, StorageMapping
 from .tasks import run_zarr_encoding
 from .utils import get_output_uri, get_storage_mapping_for_uri
-from django.contrib.auth.decorators import login_required
+
+
+import matplotlib
+
+matplotlib.use("Agg")  # Non-GUI backend
+import matplotlib.pyplot as plt
 
 
 def health_check(request):
@@ -45,6 +58,7 @@ class DeletingFileResponse(FileResponse):
             pass
 
 
+@login_required
 @require_GET
 def audio_proxy_view(request):
     uri = request.GET.get("uri")
@@ -57,90 +71,18 @@ def audio_proxy_view(request):
     if not uri:
         return HttpResponseBadRequest("Missing 'uri' parameter")
 
-    mapping = get_storage_mapping_for_uri(uri)
-    if not mapping:
-        return HttpResponseBadRequest("Unauthorized or unmapped URI prefix")
-
-    fs_input = get_fs_from_env(
-        mapping.input_profile.credentials_label, mapping.input_profile.backend
-    )
-    fs_output = get_fs_from_env(
-        mapping.output_profile.credentials_label, mapping.output_profile.backend
-    )
-
     try:
-        zarr_uri = get_output_uri(uri, base_uri=mapping.output_base_uri)
-    except ValueError as e:
-        return HttpResponseBadRequest(str(e))
-
-    audio_file, created = AudioFile.objects.get_or_create(
-        uri=uri,
-        storage_mapping=mapping,
-        defaults={
-            "status": AudioFile.STATUS.initializing,
-            "zarr_uri": zarr_uri,
-        },
-    )
-
-    if audio_file.status == AudioFile.STATUS.encoding:
-        response = HttpResponse("File is encoding. Retry later.", status=504)
-        response["Retry-After"] = "30"
-        return response
-
-    if audio_file.status == AudioFile.STATUS.queued:
-        response = HttpResponse("File is queued for encoding. Retry later.", status=504)
-        response["Retry-After"] = "30"
-        return response
-
-    if not fs_output.exists(zarr_uri):
-        try:
-            info = fs_input.info(uri)
-            size = info["size"]
-        except Exception as e:
-            return HttpResponseBadRequest(f"Error reading file metadata: {e}")
-
-        max_size = getattr(
-            settings, "DJZA_MAX_IMMEDIATE_ENCODE_SIZE_BYTES", 100_000_000
-        )
-
-        if size > max_size:
-            if created or audio_file.status == AudioFile.STATUS.initializing:
-                audio_file.status = AudioFile.STATUS.queued
-                audio_file.save()
-                run_zarr_encoding(audio_file.id)
-            response = HttpResponse(
-                "File too large; queued for encoding. Retry later.", status=504
-            )
-            response["Retry-After"] = "30"
-            return response
-
-        # Small file: encode now
-        try:
-            chunk_duration = getattr(settings, "DJZA_ZARR_AUDIO_CHUNK_DURATION", 10)
-            encoder = AudioEncoder(
-                input_uri=uri,
-                output_uri=zarr_uri,
-                storage_options=fs_output.storage_options,
-                chunk_duration=chunk_duration,
-            )
-            encoder.encode()
-            audio_file.status = AudioFile.STATUS.encoded
-            audio_file.zarr_uri = zarr_uri
-            audio_file.save()
-        except Exception as e:
-            audio_file.status = AudioFile.STATUS.exception_returned
-            audio_file.save()
-            return HttpResponseBadRequest(f"Encoding failed: {e}")
-
-    # Serve segment
-    try:
-        reader = AudioReader(zarr_uri, storage_options=fs_output.storage_options)
+        reader = get_or_create_encoded_audio_reader(uri)
         duration = end - start
         encoded_bytes = reader.read_encoded(
             start_time=start, duration=duration, format="flac"
         )
-    except KeyError:
-        response = HttpResponse("File is encoding. Retry later.", status=504)
+    except PermissionError:
+        return HttpResponseBadRequest("Unauthorized or unmapped URI prefix")
+    except ValueError as e:
+        return HttpResponseBadRequest(str(e))
+    except RuntimeError as e:
+        response = HttpResponse(f"File is {e}. Retry later.", status=504)
         response["Retry-After"] = "30"
         return response
     except Exception as e:
@@ -284,3 +226,224 @@ def list_fsspec_files_view(request):
             "is_truncated": is_truncated,
         },
     )
+
+
+@require_GET
+def spectrogram_proxy_view(request):
+    uri = request.GET.get("uri")
+    try:
+        start = float(request.GET.get("start", 0))
+        end = float(request.GET.get("end", start + 5))
+    except (TypeError, ValueError):
+        return HttpResponseBadRequest("Invalid 'start' or 'end' parameter")
+
+    if not uri:
+        return HttpResponseBadRequest("Missing 'uri' parameter")
+
+    try:
+        reader = get_or_create_encoded_audio_reader(uri)
+        duration = end - start
+        encoded_bytes = reader.read_encoded(
+            start_time=start, duration=duration, format="flac"
+        )
+        image_io = generate_spectrogram_image(
+            encoded_bytes,
+            start,
+            end,
+            n_fft=int(request.GET.get("n_fft", 2048)),
+            hop_length=int(request.GET.get("hop_length", 512)),
+            top=int(request.GET.get("top", 10000)),
+            noise_reduction=request.GET.get("noise_reduction", "false").lower()
+            == "true",
+        )
+    except PermissionError:
+        return HttpResponseBadRequest("Unauthorized or unmapped URI prefix")
+    except ValueError as e:
+        return HttpResponseBadRequest(str(e))
+    except RuntimeError as e:
+        response = HttpResponse(f"File is {e}. Retry later.", status=504)
+        response["Retry-After"] = "30"
+        return response
+    except Exception as e:
+        return HttpResponseBadRequest(f"Error generating spectrogram: {e}")
+
+    return FileResponse(image_io, content_type="image/jpeg")
+
+
+plt.ioff()  # disable interactive mode
+
+
+def generate_spectrogram_image(
+    encoded_bytes,
+    start_sec: float,
+    end_sec: float,
+    top: int = 10000,
+    dpi: int = 144,
+    n_fft: int = 1024,
+    hop_length: int = 24,
+    window: str = "hann",
+    cmap: str = "inferno",
+    top_db: float = 68.0,
+    height: float = 3.0,
+    seconds_per_inch: float = 1,
+    noise_reduction: bool = False,
+) -> io.BytesIO:
+    print("generate_spectrogram_image", hop_length, n_fft)
+
+    # 1) Load & downcast
+    with io.BytesIO(encoded_bytes) as audio_io:
+        y, sr = sf.read(audio_io)
+    y = np.asarray(y, dtype=np.float32)
+    if y.ndim > 1:
+        # mono-mix in float32
+        y = np.mean(y, axis=1, dtype=np.float32)
+
+    # 2) STFT & magnitude
+    win = (np.hanning(n_fft) if window == "hann" else np.kaiser(n_fft, beta=14)).astype(
+        np.float32
+    )
+    S = librosa.stft(y, n_fft=n_fft, hop_length=hop_length, window=win)
+    mag = np.abs(S, dtype=np.float32)
+    del S, win
+
+    # 3) dB conversion
+    if top_db is not None:
+        S_db = librosa.amplitude_to_db(mag, ref=np.max(mag), top_db=top_db)
+    else:
+        S_db = librosa.amplitude_to_db(mag, ref=np.max(mag))
+    del mag
+
+    # 3.5) Noise reduction (mostly unused for now)
+    if noise_reduction:
+        # Adaptive noise gating: suppress values near the noise floor per frequency
+        noise_threshold = np.percentile(S_db, 50, axis=1, keepdims=True)
+        # Create mask where signal is above threshold + margin
+        mask = S_db > (noise_threshold + 6)  # 6 dB above noise floor
+        # Zero out noise, keep signals
+        S_db = np.where(mask, S_db, S_db.min())
+
+    # 4) Crop or pad frequencies
+    n_rows, n_cols = S_db.shape
+    freqs = np.linspace(0, sr / 2, n_rows, dtype=np.float32)
+    freq_res = freqs[1] - freqs[0]
+    desired_rows = int(np.ceil(top / freq_res)) + 1
+
+    if desired_rows > n_rows:
+        floor = S_db.min()
+        out_db = np.empty((desired_rows, n_cols), dtype=np.float32)
+        out_db[:n_rows] = S_db
+        out_db[n_rows:] = floor
+    else:
+        max_bin = max(np.searchsorted(freqs, top, "right") - 1, 0)
+        out_db = S_db[: max_bin + 1]
+    del S_db, freqs
+
+    # 5) Plot with Matplotlib
+    duration = y.shape[0] / sr
+    fig_width = duration / seconds_per_inch
+    top_khz = (top if top <= sr / 2 else sr / 2) / 1000.0
+
+    fig = plt.figure(figsize=(fig_width, height), dpi=dpi)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(
+        out_db,
+        aspect="auto",
+        origin="lower",
+        extent=[0, duration, 0, top_khz],
+        cmap=cmap,
+    )
+    ax.set_axis_off()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0)
+    # Clean up figure state immediately
+    fig.clf()
+    plt.close(fig)
+
+    buf.seek(0)
+    return buf
+
+
+# Helper functions (common to both audio and spectrogram)
+
+
+def get_or_create_audio_file(uri, mapping, zarr_uri):
+    with transaction.atomic():
+        try:
+            # lock any existing row
+            af = AudioFile.objects.select_for_update().get(
+                uri=uri, storage_mapping=mapping
+            )
+            return af, False
+        except AudioFile.DoesNotExist:
+            # safe to insert now
+            af = AudioFile.objects.create(
+                uri=uri,
+                storage_mapping=mapping,
+                status=AudioFile.STATUS.initializing,
+                zarr_uri=zarr_uri,
+            )
+            return af, True
+
+
+def get_or_create_encoded_audio_reader(uri):
+    mapping = get_storage_mapping_for_uri(uri)
+    if not mapping:
+        raise PermissionError("Unauthorized or unmapped URI prefix")
+
+    fs_input = get_fs_from_env(
+        mapping.input_profile.credentials_label, mapping.input_profile.backend
+    )
+    fs_output = get_fs_from_env(
+        mapping.output_profile.credentials_label, mapping.output_profile.backend
+    )
+
+    try:
+        zarr_uri = get_output_uri(uri, base_uri=mapping.output_base_uri)
+    except ValueError as e:
+        raise ValueError(str(e))
+
+    audio_file, created = get_or_create_audio_file(uri, mapping, zarr_uri)
+
+    if audio_file.status == AudioFile.STATUS.encoding:
+        raise RuntimeError("encoding")
+
+    if audio_file.status == AudioFile.STATUS.queued:
+        raise RuntimeError("queued")
+
+    if not fs_output.exists(zarr_uri):
+        try:
+            info = fs_input.info(uri)
+            size = info["size"]
+        except Exception as e:
+            raise IOError(f"Error reading file metadata: {e}")
+
+        max_size = getattr(
+            settings, "DJZA_MAX_IMMEDIATE_ENCODE_SIZE_BYTES", 100_000_000
+        )
+        if size > max_size:
+            if created or audio_file.status == AudioFile.STATUS.initializing:
+                audio_file.status = AudioFile.STATUS.queued
+                audio_file.save()
+                run_zarr_encoding(audio_file.id)
+            raise RuntimeError("queued")
+
+        # Small file: encode now
+        try:
+            chunk_duration = getattr(settings, "DJZA_ZARR_AUDIO_CHUNK_DURATION", 10)
+            encoder = AudioEncoder(
+                input_uri=uri,
+                output_uri=zarr_uri,
+                storage_options=fs_output.storage_options,
+                chunk_duration=chunk_duration,
+            )
+            encoder.encode()
+            audio_file.status = AudioFile.STATUS.encoded
+            audio_file.zarr_uri = zarr_uri
+            audio_file.save()
+        except Exception as e:
+            audio_file.status = AudioFile.STATUS.exception_returned
+            audio_file.save()
+            raise RuntimeError(f"Encoding failed: {e}")
+
+    return AudioReader(zarr_uri, storage_options=fs_output.storage_options)

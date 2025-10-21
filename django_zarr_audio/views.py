@@ -27,6 +27,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # Non-GUI backend
 import matplotlib.pyplot as plt
+from PIL import Image
 
 
 def health_check(request):
@@ -240,22 +241,37 @@ def spectrogram_proxy_view(request):
     if not uri:
         return HttpResponseBadRequest("Missing 'uri' parameter")
 
+    use_pillow = request.GET.get("_pillow", "false").lower() == "true"
+
     try:
         reader = get_or_create_encoded_audio_reader(uri)
         duration = end - start
         encoded_bytes = reader.read_encoded(
             start_time=start, duration=duration, format="flac"
         )
-        image_io = generate_spectrogram_image(
-            encoded_bytes,
-            start,
-            end,
-            n_fft=int(request.GET.get("n_fft", 2048)),
-            hop_length=int(request.GET.get("hop_length", 512)),
-            top=int(request.GET.get("top", 10000)),
-            noise_reduction=request.GET.get("noise_reduction", "false").lower()
-            == "true",
-        )
+
+        if use_pillow:
+            image_io = generate_spectrogram_image_pillow(
+                encoded_bytes,
+                start,
+                end,
+                n_fft=int(request.GET.get("n_fft", 2048)),
+                hop_length=int(request.GET.get("hop_length", 512)),
+                top=int(request.GET.get("top", 10000)),
+                noise_reduction=request.GET.get("noise_reduction", "false").lower()
+                == "true",
+            )
+        else:
+            image_io = generate_spectrogram_image(
+                encoded_bytes,
+                start,
+                end,
+                n_fft=int(request.GET.get("n_fft", 2048)),
+                hop_length=int(request.GET.get("hop_length", 512)),
+                top=int(request.GET.get("top", 10000)),
+                noise_reduction=request.GET.get("noise_reduction", "false").lower()
+                == "true",
+            )
     except PermissionError:
         return HttpResponseBadRequest("Unauthorized or unmapped URI prefix")
     except ValueError as e:
@@ -271,6 +287,95 @@ def spectrogram_proxy_view(request):
 
 
 plt.ioff()  # disable interactive mode
+
+
+def generate_spectrogram_image_pillow(
+    encoded_bytes,
+    start_sec: float,
+    end_sec: float,
+    top: int = 10000,
+    n_fft: int = 1024,
+    hop_length: int = 24,
+    window: str = "hann",
+    top_db: float = 68.0,
+    dpi: int = 144,
+    height: float = 3.0,
+    seconds_per_inch: float = 1,
+    noise_reduction: bool = False,
+) -> io.BytesIO:
+    """Generate spectrogram using Pillow for faster rendering."""
+    print("generate_spectrogram_image_pillow", hop_length, n_fft)
+
+    # 1) Load & downcast
+    with io.BytesIO(encoded_bytes) as audio_io:
+        y, sr = sf.read(audio_io)
+    y = np.asarray(y, dtype=np.float32)
+    if y.ndim > 1:
+        y = np.mean(y, axis=1, dtype=np.float32)
+
+    # Calculate dimensions based on audio duration
+    duration = y.shape[0] / sr
+    fig_width = duration / seconds_per_inch
+    width_px = int(fig_width * dpi)
+    height_px = int(height * dpi)
+
+    # 2) STFT & magnitude
+    win = (np.hanning(n_fft) if window == "hann" else np.kaiser(n_fft, beta=14)).astype(
+        np.float32
+    )
+    S = librosa.stft(y, n_fft=n_fft, hop_length=hop_length, window=win)
+    mag = np.abs(S, dtype=np.float32)
+    del S, win
+
+    # 3) dB conversion
+    if top_db is not None:
+        S_db = librosa.amplitude_to_db(mag, ref=np.max(mag), top_db=top_db)
+    else:
+        S_db = librosa.amplitude_to_db(mag, ref=np.max(mag))
+    del mag
+
+    # 3.5) Noise reduction
+    if noise_reduction:
+        noise_threshold = np.percentile(S_db, 50, axis=1, keepdims=True)
+        mask = S_db > (noise_threshold + 6)
+        S_db = np.where(mask, S_db, S_db.min())
+
+    # 4) Crop frequencies
+    n_rows, n_cols = S_db.shape
+    freqs = np.linspace(0, sr / 2, n_rows, dtype=np.float32)
+    max_bin = max(np.searchsorted(freqs, top, "right") - 1, 0)
+    out_db = S_db[: max_bin + 1]
+    del S_db, freqs
+
+    # 5) Normalize to 0-255 range
+    db_min, db_max = out_db.min(), out_db.max()
+    if db_max > db_min:
+        normalized = ((out_db - db_min) / (db_max - db_min) * 255).astype(np.uint8)
+    else:
+        normalized = np.zeros_like(out_db, dtype=np.uint8)
+
+    # Flip vertically (low freq at bottom)
+    normalized = np.flipud(normalized)
+
+    # 6) Create PIL Image and resize
+    img = Image.fromarray(normalized, mode="L")
+    img = img.resize((width_px, height_px), Image.Resampling.BILINEAR)
+
+    # 7) Apply colormap (inferno)
+    # Convert grayscale to RGB using matplotlib's inferno colormap
+    cmap = plt.get_cmap("inferno")
+    # Apply colormap: normalize values to 0-1, then map to RGB
+    img_array = np.array(img, dtype=np.float32) / 255.0
+    colored = cmap(img_array)
+    # Convert to RGB (drop alpha channel) and scale to 0-255
+    rgb = (colored[:, :, :3] * 255).astype(np.uint8)
+    img = Image.fromarray(rgb, mode="RGB")
+
+    # 8) Save to BytesIO
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
 
 
 def generate_spectrogram_image(

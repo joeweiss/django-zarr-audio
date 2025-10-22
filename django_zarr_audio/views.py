@@ -242,36 +242,89 @@ def spectrogram_proxy_view(request):
         return HttpResponseBadRequest("Missing 'uri' parameter")
 
     use_pillow = request.GET.get("_pillow", "false").lower() == "true"
+    use_precomputed = request.GET.get("_precomputed", "true").lower() == "true"
+
+    print("use_precomputed", use_precomputed)
 
     try:
         reader = get_or_create_encoded_audio_reader(uri)
         duration = end - start
-        encoded_bytes = reader.read_encoded(
-            start_time=start, duration=duration, format="flac"
-        )
 
-        if use_pillow:
-            image_io = generate_spectrogram_image_pillow(
-                encoded_bytes,
-                start,
-                end,
-                n_fft=int(request.GET.get("n_fft", 2048)),
-                hop_length=int(request.GET.get("hop_length", 512)),
-                top=int(request.GET.get("top", 10000)),
-                noise_reduction=request.GET.get("noise_reduction", "false").lower()
-                == "true",
+        # Try to use precomputed spectrogram if available and requested
+        if use_precomputed and reader.has_spectrogram:
+            print("using precomputed spectro data")
+
+            try:
+                S_db = reader.read_spectrogram_array(
+                    start_time=start, duration=duration
+                )
+                print(S_db)
+                params = reader.get_spectrogram_params()
+
+                if use_pillow:
+                    image_io = generate_spectrogram_image_from_array_pillow(
+                        S_db,
+                        reader.samplerate,
+                        start,
+                        end,
+                        n_fft=params["n_fft"],
+                        hop_length=params["hop_length"],
+                        top=int(request.GET.get("top", 10000)),
+                        noise_reduction=request.GET.get(
+                            "noise_reduction", "false"
+                        ).lower()
+                        == "true",
+                    )
+                else:
+                    image_io = generate_spectrogram_image_from_array(
+                        S_db,
+                        reader.samplerate,
+                        start,
+                        end,
+                        n_fft=params["n_fft"],
+                        hop_length=params["hop_length"],
+                        top=int(request.GET.get("top", 10000)),
+                        noise_reduction=request.GET.get(
+                            "noise_reduction", "false"
+                        ).lower()
+                        == "true",
+                    )
+            except Exception as e:
+                # Fall back to computing on-demand if precomputed fails
+                print(
+                    f"⚠️ Failed to use precomputed spectrogram: {e}. Computing on-demand."
+                )
+                use_precomputed = False
+
+        # Compute spectrogram on-demand if precomputed not available or failed
+        if not use_precomputed or not reader.has_spectrogram:
+            print("using on-demand spectro data")
+            encoded_bytes = reader.read_encoded(
+                start_time=start, duration=duration, format="flac"
             )
-        else:
-            image_io = generate_spectrogram_image(
-                encoded_bytes,
-                start,
-                end,
-                n_fft=int(request.GET.get("n_fft", 2048)),
-                hop_length=int(request.GET.get("hop_length", 512)),
-                top=int(request.GET.get("top", 10000)),
-                noise_reduction=request.GET.get("noise_reduction", "false").lower()
-                == "true",
-            )
+
+            if use_pillow:
+                image_io = generate_spectrogram_image_pillow(
+                    encoded_bytes,
+                    start,
+                    end,
+                    n_fft=int(request.GET.get("n_fft", 2048)),
+                    hop_length=int(request.GET.get("hop_length", 512)),
+                    top=int(request.GET.get("top", 10000)),
+                    noise_reduction=request.GET.get("noise_reduction", "false").lower()
+                    == "true",
+                )
+            else:
+                image_io = generate_spectrogram_image(
+                    encoded_bytes,
+                    start,
+                    end,
+                    n_fft=int(request.GET.get("n_fft", 2048)),
+                    hop_length=int(request.GET.get("hop_length", 512)),
+                    top=int(request.GET.get("top", 10000)),
+                    noise_reduction=request.GET.get("noise_reduction", "false").lower()
+                    == "true",
+                )
     except PermissionError:
         return HttpResponseBadRequest("Unauthorized or unmapped URI prefix")
     except ValueError as e:
@@ -287,6 +340,135 @@ def spectrogram_proxy_view(request):
 
 
 plt.ioff()  # disable interactive mode
+
+
+def generate_spectrogram_image_from_array_pillow(
+    S_db: np.ndarray,
+    samplerate: int,
+    start_sec: float,
+    end_sec: float,
+    n_fft: int = 2048,
+    hop_length: int = 512,
+    top: int = 10000,
+    top_db: float = 68.0,
+    dpi: int = 144,
+    height: float = 3.0,
+    seconds_per_inch: float = 1,
+    noise_reduction: bool = False,
+) -> io.BytesIO:
+    """Generate spectrogram image from precomputed dB array using Pillow."""
+    print("generate_spectrogram_image_from_array_pillow", hop_length, n_fft)
+
+    # Calculate dimensions
+    duration = end_sec - start_sec
+    fig_width = duration / seconds_per_inch
+    width_px = int(fig_width * dpi)
+    height_px = int(height * dpi)
+
+    # Apply noise reduction if requested
+    if noise_reduction:
+        noise_threshold = np.percentile(S_db, 50, axis=1, keepdims=True)
+        mask = S_db > (noise_threshold + 6)
+        S_db = np.where(mask, S_db, S_db.min())
+
+    # Crop frequencies
+    n_rows, n_cols = S_db.shape
+    freqs = np.linspace(0, samplerate / 2, n_rows, dtype=np.float32)
+    max_bin = max(np.searchsorted(freqs, top, "right") - 1, 0)
+    out_db = S_db[: max_bin + 1]
+    del freqs
+
+    # Normalize to 0-255 range
+    db_min, db_max = out_db.min(), out_db.max()
+    if db_max > db_min:
+        normalized = ((out_db - db_min) / (db_max - db_min) * 255).astype(np.uint8)
+    else:
+        normalized = np.zeros_like(out_db, dtype=np.uint8)
+
+    # Flip vertically (low freq at bottom)
+    normalized = np.flipud(normalized)
+
+    # Create PIL Image and resize
+    img = Image.fromarray(normalized, mode="L")
+    img = img.resize((width_px, height_px), Image.Resampling.BILINEAR)
+
+    # Apply colormap (inferno)
+    cmap = plt.get_cmap("inferno")
+    img_array = np.array(img, dtype=np.float32) / 255.0
+    colored = cmap(img_array)
+    rgb = (colored[:, :, :3] * 255).astype(np.uint8)
+    img = Image.fromarray(rgb, mode="RGB")
+
+    # Save to BytesIO
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
+
+
+def generate_spectrogram_image_from_array(
+    S_db: np.ndarray,
+    samplerate: int,
+    start_sec: float,
+    end_sec: float,
+    n_fft: int = 2048,
+    hop_length: int = 512,
+    top: int = 10000,
+    dpi: int = 144,
+    cmap: str = "inferno",
+    top_db: float = 68.0,
+    height: float = 3.0,
+    seconds_per_inch: float = 1,
+    noise_reduction: bool = False,
+) -> io.BytesIO:
+    """Generate spectrogram image from precomputed dB array using matplotlib."""
+    print("generate_spectrogram_image_from_array", hop_length, n_fft)
+
+    # Apply noise reduction if requested
+    if noise_reduction:
+        noise_threshold = np.percentile(S_db, 50, axis=1, keepdims=True)
+        mask = S_db > (noise_threshold + 6)
+        S_db = np.where(mask, S_db, S_db.min())
+
+    # Crop or pad frequencies
+    n_rows, n_cols = S_db.shape
+    freqs = np.linspace(0, samplerate / 2, n_rows, dtype=np.float32)
+    freq_res = freqs[1] - freqs[0]
+    desired_rows = int(np.ceil(top / freq_res)) + 1
+
+    if desired_rows > n_rows:
+        floor = S_db.min()
+        out_db = np.empty((desired_rows, n_cols), dtype=np.float32)
+        out_db[:n_rows] = S_db
+        out_db[n_rows:] = floor
+    else:
+        max_bin = max(np.searchsorted(freqs, top, "right") - 1, 0)
+        out_db = S_db[: max_bin + 1]
+    del freqs
+
+    # Plot with Matplotlib
+    duration = end_sec - start_sec
+    fig_width = duration / seconds_per_inch
+    top_khz = (top if top <= samplerate / 2 else samplerate / 2) / 1000.0
+
+    fig = plt.figure(figsize=(fig_width, height), dpi=dpi)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(
+        out_db,
+        aspect="auto",
+        origin="lower",
+        extent=[0, duration, 0, top_khz],
+        cmap=cmap,
+    )
+    ax.set_axis_off()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0)
+    fig.clf()
+    plt.close(fig)
+
+    buf.seek(0)
+    return buf
 
 
 def generate_spectrogram_image_pillow(

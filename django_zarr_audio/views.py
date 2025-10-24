@@ -103,6 +103,173 @@ def audio_proxy_view(request):
 
 
 @login_required
+def browse_storage_view(request, mapping_id=None):
+    """
+    Hierarchical file browser for StorageMappings.
+    - No mapping_id: show all available mappings
+    - With mapping_id: browse directories and files under that mapping
+    """
+    if not getattr(settings, "DJZA_ENABLE_LISTING_VIEW", False):
+        raise Http404("Listing view is disabled.")
+
+    default_extensions = "wav,flac"
+
+    # If no mapping_id, show list of all active mappings
+    if mapping_id is None:
+        mappings = StorageMapping.objects.filter(status="active").select_related(
+            "input_profile", "output_profile"
+        )
+        return render(
+            request,
+            "django_zarr_audio/browse_storage.html",
+            {
+                "mappings": mappings,
+                "default_extensions": default_extensions,
+            },
+        )
+
+    # Get the specific mapping
+    try:
+        mapping = StorageMapping.objects.select_related(
+            "input_profile", "output_profile"
+        ).get(id=mapping_id, status="active")
+    except StorageMapping.DoesNotExist:
+        raise Http404("Storage mapping not found or inactive.")
+
+    # Get path from query string (relative to mapping's input_prefix)
+    relative_path = request.GET.get("path", "").strip()
+    extensions_input = request.GET.get("extensions", default_extensions)
+
+    # Parse extensions
+    extensions = {
+        (
+            ext.strip().lower()
+            if ext.strip().startswith(".")
+            else f".{ext.strip().lower()}"
+        )
+        for ext in extensions_input.split(",")
+        if ext.strip()
+    }
+
+    # Security: reject path traversal attempts
+    if ".." in relative_path.split("/"):
+        return HttpResponseBadRequest("Unsafe path: '..' not allowed")
+
+    # Build full URI
+    base_uri = mapping.input_prefix.rstrip("/")
+    if relative_path:
+        current_uri = f"{base_uri}/{relative_path.lstrip('/')}"
+    else:
+        current_uri = base_uri
+
+    # Build breadcrumbs
+    breadcrumbs = [{"name": "Mappings", "url": request.path.split("/browse-storage/")[0] + "/browse-storage/"}]
+    breadcrumbs.append({"name": f"{mapping.input_prefix}", "url": f"?path="})
+
+    if relative_path:
+        path_parts = relative_path.strip("/").split("/")
+        accumulated_path = ""
+        for part in path_parts:
+            accumulated_path = f"{accumulated_path}/{part}".lstrip("/")
+            breadcrumbs.append({"name": part, "url": f"?path={accumulated_path}"})
+
+    try:
+        fs = get_fs_from_env(
+            label=mapping.input_profile.credentials_label,
+            backend=mapping.input_profile.backend,
+        )
+
+        # List contents of current directory
+        normalized_uri = current_uri.rstrip("/")
+
+        # Get protocol
+        raw_protocol = fs.protocol
+        if isinstance(raw_protocol, (tuple, list)):
+            protocol = raw_protocol[0]
+        else:
+            protocol = raw_protocol
+
+        # List direct children only (not recursive)
+        try:
+            all_items = fs.ls(normalized_uri, detail=True)
+        except FileNotFoundError:
+            all_items = []
+
+        directories = []
+        files = []
+
+        for item in all_items:
+            # Handle different fsspec backends' response formats
+            if isinstance(item, dict):
+                item_path = item.get("name", item.get("Key", ""))
+                item_type = item.get("type", item.get("StorageClass", "file"))
+            else:
+                item_path = item
+                item_type = "file"
+
+            # Build full URI
+            if protocol == "file":
+                full_uri = f"file://{item_path}" if item_path.startswith("/") else f"file:///{item_path}"
+            else:
+                full_uri = f"{protocol}://{item_path}"
+
+            # Determine if directory or file
+            if item_type == "directory":
+                # Calculate relative path for this directory
+                if full_uri.startswith(base_uri):
+                    dir_relative = full_uri[len(base_uri):].lstrip("/")
+                else:
+                    dir_relative = item_path.split("/")[-1]
+
+                directories.append({
+                    "name": item_path.split("/")[-1] or item_path.split("/")[-2],
+                    "relative_path": dir_relative,
+                })
+            else:
+                # Check if matches extensions
+                if full_uri.lower().endswith(tuple(extensions)):
+                    files.append(full_uri)
+
+        directories.sort(key=lambda x: x["name"])
+        files.sort()
+
+        # Apply file limit
+        MAX_FILES = getattr(settings, "DJZA_MAX_LISTED_FILES", 200)
+        is_truncated = False
+        if MAX_FILES is not None and len(files) > MAX_FILES:
+            is_truncated = True
+            files = files[:MAX_FILES]
+
+    except Exception as e:
+        return render(
+            request,
+            "django_zarr_audio/browse_storage.html",
+            {
+                "error": f"Error accessing storage: {e}",
+                "mapping": mapping,
+                "breadcrumbs": breadcrumbs,
+                "extensions": extensions_input,
+                "default_extensions": default_extensions,
+            },
+        )
+
+    return render(
+        request,
+        "django_zarr_audio/browse_storage.html",
+        {
+            "mapping": mapping,
+            "breadcrumbs": breadcrumbs,
+            "directories": directories,
+            "files": files,
+            "current_path": relative_path,
+            "extensions": extensions_input,
+            "default_extensions": default_extensions,
+            "is_truncated": is_truncated,
+        },
+    )
+
+
+@login_required
 def list_fsspec_files_view(request):
     if not getattr(settings, "DJZA_ENABLE_LISTING_VIEW", False):
         raise Http404("Listing view is disabled.")

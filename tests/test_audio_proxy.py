@@ -5,6 +5,7 @@ import os
 import pathlib
 import pytest
 from django.urls import reverse
+from django.contrib.auth.models import User
 
 from django_zarr_audio.models import (
     StorageAccessProfile,
@@ -63,6 +64,9 @@ def test_audio_proxy_view_encodes_file_uri(client, settings, tmp_path):
         output_base_uri=f"file://{output_base}/",
         status="active",
     )
+
+    user = User.objects.create_user(username="testuser", password="testpass")
+    client.force_login(user)
 
     uri = f"file://{input_path}"
     response = client.get(

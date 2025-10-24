@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Storage Browser</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      font-size: 1.1rem;
+      line-height: 1.6;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+      background-color: #f9f9f9;
+      color: #222;
+    }
+
+    h1, h2, h3 {
+      margin-top: 2rem;
+      font-weight: 600;
+    }
+
+    .breadcrumbs {
+      background: #fff;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .breadcrumb-item {
+      color: #0366d6;
+      text-decoration: none;
+    }
+
+    .breadcrumb-item:hover {
+      text-decoration: underline;
+    }
+
+    .breadcrumb-separator {
+      color: #999;
+      margin: 0 0.25rem;
+    }
+
+    .breadcrumb-current {
+      color: #333;
+      font-weight: 500;
+    }
+
+    .extensions-filter {
+      background: #fff;
+      padding: 1rem;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      margin-bottom: 1.5rem;
+    }
+
+    .extensions-filter form {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .extensions-filter input {
+      padding: 0.4rem 0.6rem;
+      font-size: 0.95rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      flex: 1;
+      min-width: 150px;
+    }
+
+    .extensions-filter button {
+      padding: 0.4rem 1rem;
+      font-size: 0.95rem;
+      background-color: #0366d6;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .extensions-filter button:hover {
+      background-color: #024caa;
+    }
+
+    .mapping-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .mapping-item {
+      background: #fff;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      transition: box-shadow 0.2s;
+    }
+
+    .mapping-item:hover {
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    }
+
+    .mapping-prefix {
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 1.05rem;
+      color: #0366d6;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+    }
+
+    .mapping-details {
+      font-size: 0.9rem;
+      color: #666;
+    }
+
+    .directory-list, .file-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .directory-item {
+      background: #fff;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      transition: box-shadow 0.2s;
+      border-left: 4px solid #f59e0b;
+    }
+
+    .directory-item:hover {
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    }
+
+    .directory-name {
+      font-size: 1rem;
+      color: #0366d6;
+      text-decoration: none;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .directory-name:hover {
+      text-decoration: underline;
+    }
+
+    .directory-icon::before {
+      content: "📁";
+      font-size: 1.2rem;
+    }
+
+    .file-item {
+      background: #fff;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      transition: box-shadow 0.2s;
+    }
+
+    .file-item:hover {
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    }
+
+    .file-path {
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 0.95rem;
+      color: #333;
+      word-break: break-word;
+      margin-bottom: 0.5rem;
+      line-height: 1.4;
+    }
+
+    .file-actions {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .action-link {
+      padding: 0.35rem 0.75rem;
+      font-size: 0.9rem;
+      background-color: #f3f4f6;
+      color: #374151;
+      border-radius: 4px;
+      text-decoration: none;
+      transition: background-color 0.2s;
+      display: inline-block;
+    }
+
+    .action-link:hover {
+      background-color: #e5e7eb;
+      text-decoration: none;
+    }
+
+    .action-link.primary {
+      background-color: #dbeafe;
+      color: #1e40af;
+    }
+
+    .action-link.primary:hover {
+      background-color: #bfdbfe;
+    }
+
+    .error {
+      color: #b00020;
+      font-weight: 500;
+      margin-bottom: 1rem;
+      background: #ffebee;
+      padding: 1rem;
+      border-radius: 6px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .count-badge {
+      background: #e5e7eb;
+      color: #374151;
+      padding: 0.2rem 0.6rem;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .empty-message {
+      color: #666;
+      font-style: italic;
+      padding: 1rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Storage Browser</h1>
+
+  {% if breadcrumbs %}
+    <div class="breadcrumbs">
+      {% for crumb in breadcrumbs %}
+        {% if not forloop.last %}
+          <a href="{{ crumb.url }}" class="breadcrumb-item">{{ crumb.name }}</a>
+          <span class="breadcrumb-separator">/</span>
+        {% else %}
+          <span class="breadcrumb-current">{{ crumb.name }}</span>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% if mappings %}
+    <h2>Available Storage Mappings</h2>
+    <ul class="mapping-list">
+      {% for mapping in mappings %}
+        <li class="mapping-item">
+          <a href="{% url 'zap:browse-storage' mapping.id %}" style="text-decoration: none; color: inherit; display: block;">
+            <div class="mapping-prefix">{{ mapping.input_prefix }}</div>
+            <div class="mapping-details">
+              Output: {{ mapping.output_base_uri }}
+            </div>
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if mapping %}
+    <div class="extensions-filter">
+      <form method="get">
+        <label for="extensions" style="margin-right: 0.5rem;">Extensions:</label>
+        <input type="text" id="extensions" name="extensions" value="{{ extensions }}" placeholder="wav,flac">
+        {% if current_path %}
+          <input type="hidden" name="path" value="{{ current_path }}">
+        {% endif %}
+        <button type="submit">Filter</button>
+      </form>
+    </div>
+
+    {% if directories %}
+      <div class="section-header">
+        <h2 style="margin: 0;">Directories</h2>
+        <span class="count-badge">{{ directories|length }}</span>
+      </div>
+      <ul class="directory-list">
+        {% for dir in directories %}
+          <li class="directory-item">
+            <a href="?path={{ dir.relative_path }}&extensions={{ extensions }}" class="directory-name">
+              <span class="directory-icon"></span>
+              <span>{{ dir.name }}</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    {% if files %}
+      <div class="section-header">
+        <h2 style="margin: 0;">Files</h2>
+        <span class="count-badge">{{ files|length }}</span>
+      </div>
+      <ul class="file-list">
+        {% for file in files %}
+          <li class="file-item">
+            <div class="file-path">{{ file }}</div>
+            <div class="file-actions">
+              <a class="action-link primary" href="{% url 'zap:audio-proxy' %}?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+                Audio
+              </a>
+              <a class="action-link primary" href="{% url 'zap:spectrogram-proxy' %}?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+                Spectrogram
+              </a>
+              <a class="action-link" href="http://localhost:5173/static/app/#/scroller?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+                Dev Player
+              </a>
+              <a class="action-link" href="/static/app/index.html#/scroller?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+                Build
+              </a>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if is_truncated %}
+        <p style="color: #999; text-align: center;">Showing first {{ files|length }} files (limit reached).</p>
+      {% endif %}
+    {% elif not directories and not error %}
+      <p class="empty-message">No files or directories found.</p>
+    {% endif %}
+  {% endif %}
+
+</body>
+</html>

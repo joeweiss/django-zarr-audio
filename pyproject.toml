@@ -14,7 +14,8 @@ dependencies = [
     "Django >=4.2",
     "zarr-audio",
     "django-model-utils",
-    "huey"
+    "huey",
+    "matplotlib"
 ]
 
 classifiers = [

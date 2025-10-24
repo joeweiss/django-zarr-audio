@@ -82,6 +82,71 @@
       font-weight: 500;
       margin-bottom: 1rem;
     }
+
+    .file-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .file-item {
+      background: #fff;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      transition: box-shadow 0.2s;
+    }
+
+    .file-item:hover {
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    }
+
+    .file-path {
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 0.95rem;
+      color: #333;
+      word-break: break-word;
+      margin-bottom: 0.5rem;
+      line-height: 1.4;
+    }
+
+    .file-actions {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .action-link {
+      padding: 0.35rem 0.75rem;
+      font-size: 0.9rem;
+      background-color: #f3f4f6;
+      color: #374151;
+      border-radius: 4px;
+      text-decoration: none;
+      transition: background-color 0.2s;
+      display: inline-block;
+    }
+
+    .action-link:hover {
+      background-color: #e5e7eb;
+      text-decoration: none;
+    }
+
+    .action-link.primary {
+      background-color: #dbeafe;
+      color: #1e40af;
+    }
+
+    .action-link.primary:hover {
+      background-color: #bfdbfe;
+    }
+
+    .file-count {
+      color: #666;
+      font-weight: normal;
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
@@ -110,13 +175,25 @@
   {% endif %}
 
   {% if files %}
-    <h2>Matched Files ({{ files|length }})</h2>
-    <ul>
+    <h2>Matched Files <span class="file-count">({{ files|length }})</span></h2>
+    <ul class="file-list">
       {% for file in files %}
-        <li>
-          <a href="{% url 'zap:audio-proxy' %}?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
-            {{ file }}
-          </a>
+        <li class="file-item">
+          <div class="file-path">{{ file }}</div>
+          <div class="file-actions">
+            <a class="action-link primary" href="{% url 'zap:audio-proxy' %}?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+              Audio
+            </a>
+            <a class="action-link primary" href="{% url 'zap:spectrogram-proxy' %}?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+              Spectrogram
+            </a>
+            <a class="action-link" href="http://localhost:5173/static/app/#/scroller?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+              Dev Player
+            </a>
+            <a class="action-link" href="/static/app/index.html#/scroller?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+              Build
+            </a>
+          </div>
         </li>
       {% endfor %}
     </ul>

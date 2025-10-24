@@ -249,7 +249,14 @@
 </head>
 <body>
 
-  <h1>Storage Browser</h1>
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+    <h1 style="margin: 0;">Storage Browser</h1>
+    {% if not mapping %}
+      <a href="{% url 'zap:add-storage-mapping' %}" style="padding: 0.6rem 1.2rem; font-size: 1rem; background-color: #0366d6; color: white; border-radius: 4px; text-decoration: none; display: inline-block;">
+        + Add Mapping
+      </a>
+    {% endif %}
+  </div>
 
   {% if breadcrumbs %}
     <div class="breadcrumbs">

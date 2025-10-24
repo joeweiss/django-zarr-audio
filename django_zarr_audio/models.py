@@ -32,7 +32,7 @@ class StorageAccessProfile(TimeStampedModel, StatusModel):
     description = models.TextField(blank=True)
 
     def __str__(self):
-        return f"{self.credentials_label} ({self.backend})"
+        return f"{self.credentials_label} ({self.backend}) ID: {self.id}"
 
 
 class StorageMapping(TimeStampedModel, StatusModel):

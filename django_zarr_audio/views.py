@@ -18,7 +18,7 @@ from zarr_audio.encoder import AudioEncoder
 from zarr_audio.reader import AudioReader
 
 from .credentials import get_fs_from_env
-from .models import AudioFile, StorageMapping
+from .models import AudioFile, StorageAccessProfile, StorageMapping
 from .tasks import run_zarr_encoding
 from .utils import get_output_uri, get_storage_mapping_for_uri
 
@@ -267,6 +267,207 @@ def browse_storage_view(request, mapping_id=None):
             "is_truncated": is_truncated,
         },
     )
+
+
+@login_required
+def add_storage_mapping_view(request):
+    """
+    Form to create a new StorageMapping and associated StorageAccessProfiles if needed.
+    """
+    if not getattr(settings, "DJZA_ENABLE_LISTING_VIEW", False):
+        raise Http404("Listing view is disabled.")
+
+    if request.method == "GET":
+        # Get existing profiles for the form
+        profiles = StorageAccessProfile.objects.filter(status="active")
+        return render(
+            request,
+            "django_zarr_audio/add_storage_mapping.html",
+            {
+                "profiles": profiles,
+            },
+        )
+
+    # POST: Create new mapping
+    input_prefix = request.POST.get("input_prefix", "").strip()
+    output_base_uri = request.POST.get("output_base_uri", "").strip()
+
+    # Input profile: either select existing or create new
+    input_profile_id = request.POST.get("input_profile_id")
+    create_new_input = request.POST.get("create_new_input") == "on"
+
+    # Output profile: either select existing or create new
+    output_profile_id = request.POST.get("output_profile_id")
+    create_new_output = request.POST.get("create_new_output") == "on"
+
+    errors = []
+
+    # Validation
+    if not input_prefix:
+        errors.append("Input prefix is required.")
+    if not output_base_uri:
+        errors.append("Output base URI is required.")
+
+    # Handle input profile
+    if create_new_input:
+        input_creds = request.POST.get("input_credentials_label", "").strip()
+        input_backend = request.POST.get("input_backend", "").strip()
+        input_desc = request.POST.get("input_description", "").strip()
+
+        if not input_creds:
+            errors.append("Input credentials label is required.")
+        if not input_backend:
+            errors.append("Input backend is required.")
+
+        if not errors:
+            input_profile = StorageAccessProfile.objects.create(
+                credentials_label=input_creds,
+                backend=input_backend,
+                description=input_desc,
+                status="active",
+            )
+    else:
+        if not input_profile_id:
+            errors.append("Input profile must be selected or created.")
+        else:
+            try:
+                input_profile = StorageAccessProfile.objects.get(id=input_profile_id)
+            except StorageAccessProfile.DoesNotExist:
+                errors.append("Selected input profile not found.")
+
+    # Handle output profile
+    if create_new_output:
+        output_creds = request.POST.get("output_credentials_label", "").strip()
+        output_backend = request.POST.get("output_backend", "").strip()
+        output_desc = request.POST.get("output_description", "").strip()
+
+        if not output_creds:
+            errors.append("Output credentials label is required.")
+        if not output_backend:
+            errors.append("Output backend is required.")
+
+        if not errors:
+            output_profile = StorageAccessProfile.objects.create(
+                credentials_label=output_creds,
+                backend=output_backend,
+                description=output_desc,
+                status="active",
+            )
+    else:
+        if not output_profile_id:
+            errors.append("Output profile must be selected or created.")
+        else:
+            try:
+                output_profile = StorageAccessProfile.objects.get(id=output_profile_id)
+            except StorageAccessProfile.DoesNotExist:
+                errors.append("Selected output profile not found.")
+
+    if errors:
+        profiles = StorageAccessProfile.objects.filter(status="active")
+        return render(
+            request,
+            "django_zarr_audio/add_storage_mapping.html",
+            {
+                "profiles": profiles,
+                "errors": errors,
+                "form_data": request.POST,
+            },
+        )
+
+    # Validate input storage access
+    try:
+        fs_input = get_fs_from_env(
+            label=input_profile.credentials_label,
+            backend=input_profile.backend,
+        )
+        # Try to access the input prefix
+        parsed = urlparse(input_prefix)
+        path_to_check = parsed.path if parsed.scheme else input_prefix
+
+        # Remove protocol prefix for fs operations
+        if input_profile.backend == "file":
+            check_path = path_to_check
+        else:
+            # For s3://bucket/path, we need just bucket/path
+            check_path = parsed.netloc + parsed.path if parsed.netloc else path_to_check
+
+        # Try to list the directory to validate access
+        try:
+            fs_input.ls(check_path.rstrip("/"), detail=False)
+        except FileNotFoundError:
+            # Directory doesn't exist yet - that's okay, but check parent exists or we can create it
+            pass
+        except Exception as e:
+            errors.append(f"Cannot access input prefix: {e}")
+    except Exception as e:
+        errors.append(f"Invalid input storage configuration: {e}")
+
+    # Validate output storage access
+    try:
+        fs_output = get_fs_from_env(
+            label=output_profile.credentials_label,
+            backend=output_profile.backend,
+        )
+        # Try to access the output base URI
+        parsed = urlparse(output_base_uri)
+        path_to_check = parsed.path if parsed.scheme else output_base_uri
+
+        # Remove protocol prefix for fs operations
+        if output_profile.backend == "file":
+            check_path = path_to_check
+        else:
+            check_path = parsed.netloc + parsed.path if parsed.netloc else path_to_check
+
+        # Try to list/create the directory to validate write access
+        try:
+            fs_output.ls(check_path.rstrip("/"), detail=False)
+        except FileNotFoundError:
+            # Try to create the directory to test write access
+            try:
+                fs_output.makedirs(check_path.rstrip("/"), exist_ok=True)
+            except Exception as e:
+                errors.append(f"Cannot create output directory (check write permissions): {e}")
+        except Exception as e:
+            errors.append(f"Cannot access output base URI: {e}")
+    except Exception as e:
+        errors.append(f"Invalid output storage configuration: {e}")
+
+    # If validation errors occurred, show them
+    if errors:
+        profiles = StorageAccessProfile.objects.filter(status="active")
+        return render(
+            request,
+            "django_zarr_audio/add_storage_mapping.html",
+            {
+                "profiles": profiles,
+                "errors": errors,
+                "form_data": request.POST,
+            },
+        )
+
+    # Create the mapping
+    try:
+        StorageMapping.objects.create(
+            input_prefix=input_prefix,
+            input_profile=input_profile,
+            output_profile=output_profile,
+            output_base_uri=output_base_uri,
+            status="active",
+        )
+        # Redirect to browse storage on success
+        from django.shortcuts import redirect
+        return redirect("zap:browse-storage")
+    except Exception as e:
+        profiles = StorageAccessProfile.objects.filter(status="active")
+        return render(
+            request,
+            "django_zarr_audio/add_storage_mapping.html",
+            {
+                "profiles": profiles,
+                "errors": [f"Error creating mapping: {e}"],
+                "form_data": request.POST,
+            },
+        )
 
 
 @login_required

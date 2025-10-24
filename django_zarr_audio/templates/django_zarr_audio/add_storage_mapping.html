@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Add Storage Mapping</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      font-size: 1.1rem;
+      line-height: 1.6;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+      background-color: #f9f9f9;
+      color: #222;
+    }
+
+    h1, h2, h3 {
+      margin-top: 2rem;
+      font-weight: 600;
+    }
+
+    h1 {
+      margin-top: 0;
+    }
+
+    .back-link {
+      display: inline-block;
+      margin-bottom: 1.5rem;
+      color: #0366d6;
+      text-decoration: none;
+      font-size: 0.95rem;
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    form {
+      background: #fff;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+      margin-bottom: 2rem;
+    }
+
+    .form-section {
+      margin-bottom: 2rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .form-section:last-of-type {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 1rem;
+      font-weight: 500;
+    }
+
+    input[type="text"],
+    select,
+    textarea {
+      width: 100%;
+      padding: 0.5rem;
+      font-size: 1rem;
+      margin-top: 0.25rem;
+      box-sizing: border-box;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+
+    textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+
+    input[type="checkbox"] {
+      margin-right: 0.5rem;
+    }
+
+    .checkbox-label {
+      font-weight: normal;
+      cursor: pointer;
+    }
+
+    button {
+      padding: 0.6rem 1.2rem;
+      font-size: 1rem;
+      background-color: #0366d6;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 0.5rem;
+    }
+
+    button:hover {
+      background-color: #024caa;
+    }
+
+    button[type="button"] {
+      background-color: #6c757d;
+    }
+
+    button[type="button"]:hover {
+      background-color: #5a6268;
+    }
+
+    .error {
+      color: #b00020;
+      font-weight: 500;
+      margin-bottom: 1rem;
+      background: #ffebee;
+      padding: 1rem;
+      border-radius: 6px;
+    }
+
+    .error ul {
+      margin: 0;
+      padding-left: 1.25rem;
+    }
+
+    .conditional-fields {
+      margin-left: 1.5rem;
+      margin-top: 1rem;
+      padding: 1rem;
+      background: #f8f9fa;
+      border-radius: 6px;
+      border-left: 3px solid #0366d6;
+    }
+
+    .conditional-fields label {
+      margin-bottom: 0.75rem;
+    }
+
+    .help-text {
+      font-size: 0.9rem;
+      color: #666;
+      margin-top: 0.25rem;
+      font-style: italic;
+    }
+
+    .section-title {
+      margin-top: 0;
+      margin-bottom: 1rem;
+      color: #333;
+      font-size: 1.2rem;
+    }
+  </style>
+  <script>
+    function toggleInputProfileFields() {
+      const checkbox = document.getElementById('create_new_input');
+      const selectField = document.getElementById('input_profile_select');
+      const newFields = document.getElementById('new_input_fields');
+
+      if (checkbox.checked) {
+        selectField.style.display = 'none';
+        newFields.style.display = 'block';
+      } else {
+        selectField.style.display = 'block';
+        newFields.style.display = 'none';
+      }
+    }
+
+    function toggleOutputProfileFields() {
+      const checkbox = document.getElementById('create_new_output');
+      const selectField = document.getElementById('output_profile_select');
+      const newFields = document.getElementById('new_output_fields');
+
+      if (checkbox.checked) {
+        selectField.style.display = 'none';
+        newFields.style.display = 'block';
+      } else {
+        selectField.style.display = 'block';
+        newFields.style.display = 'none';
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      toggleInputProfileFields();
+      toggleOutputProfileFields();
+    });
+  </script>
+</head>
+<body>
+
+  <a href="{% url 'zap:browse-storage' %}" class="back-link">← Back to Storage Browser</a>
+
+  <h1>Add Storage Mapping</h1>
+
+  {% if errors %}
+    <div class="error">
+      <strong>Please correct the following errors:</strong>
+      <ul>
+        {% for error in errors %}
+          <li>{{ error }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+
+    <div class="form-section">
+      <h3 class="section-title">Mapping Details</h3>
+
+      <label>
+        Input Prefix:
+        <input type="text" name="input_prefix" value="{{ form_data.input_prefix }}" placeholder="e.g., s3://source-bucket/ or file:///data/audio/" required>
+        <div class="help-text">URI prefix for incoming audio files</div>
+      </label>
+
+      <label>
+        Output Base URI:
+        <input type="text" name="output_base_uri" value="{{ form_data.output_base_uri }}" placeholder="e.g., s3://target-bucket/encoded/ or file:///data/zarr/" required>
+        <div class="help-text">Base URI where Zarr-encoded files will be written</div>
+      </label>
+    </div>
+
+    <div class="form-section">
+      <h3 class="section-title">Input Storage Profile</h3>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="create_new_input" name="create_new_input" onchange="toggleInputProfileFields()" {% if form_data.create_new_input %}checked{% endif %}>
+        Create new input profile
+      </label>
+
+      <div id="input_profile_select">
+        <label>
+          Select existing profile:
+          <select name="input_profile_id">
+            <option value="">-- Select a profile --</option>
+            {% for profile in profiles %}
+              <option value="{{ profile.id }}" {% if form_data.input_profile_id == profile.id|stringformat:"s" %}selected{% endif %}>
+                {{ profile.credentials_label }} ({{ profile.backend }})
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+
+      <div id="new_input_fields" class="conditional-fields" style="display: none;">
+        <label>
+          Credentials Label:
+          <input type="text" name="input_credentials_label" value="{{ form_data.input_credentials_label }}" placeholder="e.g., my-s3-credentials">
+          <div class="help-text">Key used to look up credentials (e.g., for get_fs_from_env())</div>
+        </label>
+
+        <label>
+          Backend:
+          <select name="input_backend">
+            <option value="">-- Select backend --</option>
+            <option value="s3" {% if form_data.input_backend == "s3" %}selected{% endif %}>S3</option>
+            <option value="gcs" {% if form_data.input_backend == "gcs" %}selected{% endif %}>GCS</option>
+            <option value="http" {% if form_data.input_backend == "http" %}selected{% endif %}>HTTP</option>
+            <option value="file" {% if form_data.input_backend == "file" %}selected{% endif %}>Local FS</option>
+            <option value="custom" {% if form_data.input_backend == "custom" %}selected{% endif %}>Custom</option>
+          </select>
+        </label>
+
+        <label>
+          Description (optional):
+          <textarea name="input_description" placeholder="Optional description">{{ form_data.input_description }}</textarea>
+        </label>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <h3 class="section-title">Output Storage Profile</h3>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="create_new_output" name="create_new_output" onchange="toggleOutputProfileFields()" {% if form_data.create_new_output %}checked{% endif %}>
+        Create new output profile
+      </label>
+
+      <div id="output_profile_select">
+        <label>
+          Select existing profile:
+          <select name="output_profile_id">
+            <option value="">-- Select a profile --</option>
+            {% for profile in profiles %}
+              <option value="{{ profile.id }}" {% if form_data.output_profile_id == profile.id|stringformat:"s" %}selected{% endif %}>
+                {{ profile.credentials_label }} ({{ profile.backend }})
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+
+      <div id="new_output_fields" class="conditional-fields" style="display: none;">
+        <label>
+          Credentials Label:
+          <input type="text" name="output_credentials_label" value="{{ form_data.output_credentials_label }}" placeholder="e.g., my-s3-credentials">
+          <div class="help-text">Key used to look up credentials (e.g., for get_fs_from_env())</div>
+        </label>
+
+        <label>
+          Backend:
+          <select name="output_backend">
+            <option value="">-- Select backend --</option>
+            <option value="s3" {% if form_data.output_backend == "s3" %}selected{% endif %}>S3</option>
+            <option value="gcs" {% if form_data.output_backend == "gcs" %}selected{% endif %}>GCS</option>
+            <option value="http" {% if form_data.output_backend == "http" %}selected{% endif %}>HTTP</option>
+            <option value="file" {% if form_data.output_backend == "file" %}selected{% endif %}>Local FS</option>
+            <option value="custom" {% if form_data.output_backend == "custom" %}selected{% endif %}>Custom</option>
+          </select>
+        </label>
+
+        <label>
+          Description (optional):
+          <textarea name="output_description" placeholder="Optional description">{{ form_data.output_description }}</textarea>
+        </label>
+      </div>
+    </div>
+
+    <div style="margin-top: 2rem;">
+      <button type="submit">Create Mapping</button>
+      <button type="button" onclick="window.location.href='{% url 'zap:browse-storage' %}'">Cancel</button>
+    </div>
+  </form>
+
+</body>
+</html>

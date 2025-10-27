@@ -163,7 +163,12 @@ def browse_storage_view(request, mapping_id=None):
         current_uri = base_uri
 
     # Build breadcrumbs
-    breadcrumbs = [{"name": "Mappings", "url": request.path.split("/browse-storage/")[0] + "/browse-storage/"}]
+    breadcrumbs = [
+        {
+            "name": "Mappings",
+            "url": request.path.split("/browse-storage/")[0] + "/browse-storage/",
+        }
+    ]
     breadcrumbs.append({"name": f"{mapping.input_prefix}", "url": f"?path="})
 
     if relative_path:
@@ -209,7 +214,11 @@ def browse_storage_view(request, mapping_id=None):
 
             # Build full URI
             if protocol == "file":
-                full_uri = f"file://{item_path}" if item_path.startswith("/") else f"file:///{item_path}"
+                full_uri = (
+                    f"file://{item_path}"
+                    if item_path.startswith("/")
+                    else f"file:///{item_path}"
+                )
             else:
                 full_uri = f"{protocol}://{item_path}"
 
@@ -217,14 +226,16 @@ def browse_storage_view(request, mapping_id=None):
             if item_type == "directory":
                 # Calculate relative path for this directory
                 if full_uri.startswith(base_uri):
-                    dir_relative = full_uri[len(base_uri):].lstrip("/")
+                    dir_relative = full_uri[len(base_uri) :].lstrip("/")
                 else:
                     dir_relative = item_path.split("/")[-1]
 
-                directories.append({
-                    "name": item_path.split("/")[-1] or item_path.split("/")[-2],
-                    "relative_path": dir_relative,
-                })
+                directories.append(
+                    {
+                        "name": item_path.split("/")[-1] or item_path.split("/")[-2],
+                        "relative_path": dir_relative,
+                    }
+                )
             else:
                 # Check if matches extensions
                 if full_uri.lower().endswith(tuple(extensions)):
@@ -426,7 +437,9 @@ def add_storage_mapping_view(request):
             try:
                 fs_output.makedirs(check_path.rstrip("/"), exist_ok=True)
             except Exception as e:
-                errors.append(f"Cannot create output directory (check write permissions): {e}")
+                errors.append(
+                    f"Cannot create output directory (check write permissions): {e}"
+                )
         except Exception as e:
             errors.append(f"Cannot access output base URI: {e}")
     except Exception as e:
@@ -456,6 +469,7 @@ def add_storage_mapping_view(request):
         )
         # Redirect to browse storage on success
         from django.shortcuts import redirect
+
         return redirect("zap:browse-storage")
     except Exception as e:
         profiles = StorageAccessProfile.objects.filter(status="active")
@@ -626,8 +640,8 @@ def spectrogram_proxy_view(request):
                 n_fft=int(request.GET.get("n_fft", 2048)),
                 hop_length=int(request.GET.get("hop_length", 512)),
                 top=int(request.GET.get("top", 10000)),
-                noise_reduction=request.GET.get("noise_reduction", "false").lower()
-                == "true",
+                cmap=request.GET.get("cmap", "viridis"),
+                normalize=request.GET.get("normalize", "false").lower() == "true",
             )
         else:
             image_io = generate_spectrogram_image(
@@ -637,8 +651,8 @@ def spectrogram_proxy_view(request):
                 n_fft=int(request.GET.get("n_fft", 2048)),
                 hop_length=int(request.GET.get("hop_length", 512)),
                 top=int(request.GET.get("top", 10000)),
-                noise_reduction=request.GET.get("noise_reduction", "false").lower()
-                == "true",
+                cmap=request.GET.get("cmap", "viridis"),
+                normalize=request.GET.get("normalize", "false").lower() == "true",
             )
     except PermissionError:
         return HttpResponseBadRequest("Unauthorized or unmapped URI prefix")
@@ -665,11 +679,12 @@ def generate_spectrogram_image_pillow(
     n_fft: int = 1024,
     hop_length: int = 24,
     window: str = "hann",
+    cmap: str = "viridis",
     top_db: float = 68.0,
     dpi: int = 144,
     height: float = 3.0,
     seconds_per_inch: float = 1,
-    noise_reduction: bool = False,
+    normalize: bool = False,
 ) -> io.BytesIO:
     """Generate spectrogram using Pillow for faster rendering."""
     print("generate_spectrogram_image_pillow", hop_length, n_fft)
@@ -697,16 +712,10 @@ def generate_spectrogram_image_pillow(
 
     # 3) dB conversion
     if top_db is not None:
-        S_db = librosa.amplitude_to_db(mag, ref=np.max(mag), top_db=top_db)
+        S_db = librosa.amplitude_to_db(mag, ref=1.0, top_db=top_db)
     else:
-        S_db = librosa.amplitude_to_db(mag, ref=np.max(mag))
+        S_db = librosa.amplitude_to_db(mag, ref=1.0)
     del mag
-
-    # 3.5) Noise reduction
-    if noise_reduction:
-        noise_threshold = np.percentile(S_db, 50, axis=1, keepdims=True)
-        mask = S_db > (noise_threshold + 6)
-        S_db = np.where(mask, S_db, S_db.min())
 
     # 4) Crop frequencies
     n_rows, n_cols = S_db.shape
@@ -716,11 +725,19 @@ def generate_spectrogram_image_pillow(
     del S_db, freqs
 
     # 5) Normalize to 0-255 range
-    db_min, db_max = out_db.min(), out_db.max()
-    if db_max > db_min:
-        normalized = ((out_db - db_min) / (db_max - db_min) * 255).astype(np.uint8)
+    if normalize:
+        # Auto-scale: use actual min/max from this segment
+        db_min, db_max = out_db.min(), out_db.max()
+        if db_max > db_min:
+            normalized = ((out_db - db_min) / (db_max - db_min) * 255).astype(np.uint8)
+        else:
+            normalized = np.zeros_like(out_db, dtype=np.uint8)
     else:
-        normalized = np.zeros_like(out_db, dtype=np.uint8)
+        # Fixed range: -top_db to 0 dB for consistent visualization
+        db_min, db_max = -top_db, 0.0
+        normalized = np.clip((out_db - db_min) / (db_max - db_min) * 255, 0, 255).astype(
+            np.uint8
+        )
 
     # Flip vertically (low freq at bottom)
     normalized = np.flipud(normalized)
@@ -729,12 +746,12 @@ def generate_spectrogram_image_pillow(
     img = Image.fromarray(normalized, mode="L")
     img = img.resize((width_px, height_px), Image.Resampling.BILINEAR)
 
-    # 7) Apply colormap (inferno)
-    # Convert grayscale to RGB using matplotlib's inferno colormap
-    cmap = plt.get_cmap("inferno")
+    # 7) Apply colormap
+    # Convert grayscale to RGB using matplotlib colormap
+    cmap_obj = plt.get_cmap(cmap)
     # Apply colormap: normalize values to 0-1, then map to RGB
     img_array = np.array(img, dtype=np.float32) / 255.0
-    colored = cmap(img_array)
+    colored = cmap_obj(img_array)
     # Convert to RGB (drop alpha channel) and scale to 0-255
     rgb = (colored[:, :, :3] * 255).astype(np.uint8)
     img = Image.fromarray(rgb, mode="RGB")
@@ -755,11 +772,11 @@ def generate_spectrogram_image(
     n_fft: int = 1024,
     hop_length: int = 24,
     window: str = "hann",
-    cmap: str = "inferno",
+    cmap: str = "viridis",
     top_db: float = 68.0,
     height: float = 3.0,
     seconds_per_inch: float = 1,
-    noise_reduction: bool = False,
+    normalize: bool = False,
 ) -> io.BytesIO:
     print("generate_spectrogram_image", hop_length, n_fft)
 
@@ -781,19 +798,10 @@ def generate_spectrogram_image(
 
     # 3) dB conversion
     if top_db is not None:
-        S_db = librosa.amplitude_to_db(mag, ref=np.max(mag), top_db=top_db)
+        S_db = librosa.amplitude_to_db(mag, ref=1.0, top_db=top_db)
     else:
-        S_db = librosa.amplitude_to_db(mag, ref=np.max(mag))
+        S_db = librosa.amplitude_to_db(mag, ref=1.0)
     del mag
-
-    # 3.5) Noise reduction (mostly unused for now)
-    if noise_reduction:
-        # Adaptive noise gating: suppress values near the noise floor per frequency
-        noise_threshold = np.percentile(S_db, 50, axis=1, keepdims=True)
-        # Create mask where signal is above threshold + margin
-        mask = S_db > (noise_threshold + 6)  # 6 dB above noise floor
-        # Zero out noise, keep signals
-        S_db = np.where(mask, S_db, S_db.min())
 
     # 4) Crop or pad frequencies
     n_rows, n_cols = S_db.shape
@@ -818,13 +826,26 @@ def generate_spectrogram_image(
 
     fig = plt.figure(figsize=(fig_width, height), dpi=dpi)
     ax = fig.add_axes([0, 0, 1, 1])
-    ax.imshow(
-        out_db,
-        aspect="auto",
-        origin="lower",
-        extent=[0, duration, 0, top_khz],
-        cmap=cmap,
-    )
+    if normalize:
+        # Auto-scale: let imshow determine vmin/vmax from data
+        ax.imshow(
+            out_db,
+            aspect="auto",
+            origin="lower",
+            extent=[0, duration, 0, top_khz],
+            cmap=cmap,
+        )
+    else:
+        # Fixed range: -top_db to 0 dB for consistent visualization
+        ax.imshow(
+            out_db,
+            aspect="auto",
+            origin="lower",
+            extent=[0, duration, 0, top_khz],
+            cmap=cmap,
+            vmin=-top_db,
+            vmax=0.0,
+        )
     ax.set_axis_off()
 
     buf = io.BytesIO()

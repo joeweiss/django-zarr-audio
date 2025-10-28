@@ -214,6 +214,41 @@
       background-color: #bfdbfe;
     }
 
+    .status-badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-encoded {
+      background-color: #d1fae5;
+      color: #065f46;
+    }
+
+    .status-encoding {
+      background-color: #fef3c7;
+      color: #92400e;
+    }
+
+    .status-queued {
+      background-color: #dbeafe;
+      color: #1e40af;
+    }
+
+    .status-exception {
+      background-color: #fee2e2;
+      color: #991b1b;
+    }
+
+    .status-unknown {
+      background-color: #f3f4f6;
+      color: #6b7280;
+    }
+
     .error {
       color: #b00020;
       font-weight: 500;
@@ -328,18 +363,31 @@
       <ul class="file-list">
         {% for file in files %}
           <li class="file-item">
-            <div class="file-path">{{ file }}</div>
+            <div class="file-path">
+              {{ file.uri }}
+              {% if file.status == 'encoded' %}
+                <span class="status-badge status-encoded">✓ Encoded</span>
+              {% elif file.status == 'encoding' %}
+                <span class="status-badge status-encoding">⟳ Encoding</span>
+              {% elif file.status == 'queued' %}
+                <span class="status-badge status-queued">⋯ Queued</span>
+              {% elif file.status == 'exception_returned' %}
+                <span class="status-badge status-exception">✗ Error</span>
+              {% elif file.status %}
+                <span class="status-badge status-unknown">{{ file.status }}</span>
+              {% endif %}
+            </div>
             <div class="file-actions">
-              <a class="action-link primary" href="{% url 'zap:audio-proxy' %}?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+              <a class="action-link primary" href="{% url 'zap:audio-proxy' %}?uri={{ file.uri|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
                 Audio
               </a>
-              <a class="action-link primary" href="{% url 'zap:spectrogram-proxy' %}?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+              <a class="action-link primary" href="{% url 'zap:spectrogram-proxy' %}?uri={{ file.uri|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
                 Spectrogram
               </a>
-              <a class="action-link" href="http://localhost:5173/static/app/#/scroller?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+              <a class="action-link" href="http://localhost:5173/static/app/#/scroller?uri={{ file.uri|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
                 Dev Player
               </a>
-              <a class="action-link" href="/static/app/index.html#/scroller?uri={{ file|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
+              <a class="action-link" href="/static/app/index.html#/scroller?uri={{ file.uri|urlencode }}&start=0&end=5" target="_blank" rel="noopener noreferrer">
                 Build
               </a>
             </div>

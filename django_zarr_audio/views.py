@@ -83,8 +83,8 @@ def audio_proxy_view(request):
     except ValueError as e:
         return HttpResponseBadRequest(str(e))
     except RuntimeError as e:
-        response = HttpResponse(f"File is {e}. Retry later.", status=504)
-        response["Retry-After"] = "30"
+        response = HttpResponse(f"File is {e}. Retry later.", status=202)
+        response["Retry-After"] = "5"
         return response
     except Exception as e:
         return HttpResponseBadRequest(f"Error reading encoded segment: {e}")
@@ -251,6 +251,21 @@ def browse_storage_view(request, mapping_id=None):
             is_truncated = True
             files = files[:MAX_FILES]
 
+        # Get encoding status for files
+        from .models import AudioFile
+        file_uris = {f for f in files}
+        audio_files = AudioFile.objects.filter(uri__in=file_uris).only('uri', 'status')
+        file_status_map = {af.uri: af.status for af in audio_files}
+
+        # Attach status to each file
+        files_with_status = [
+            {
+                'uri': file_uri,
+                'status': file_status_map.get(file_uri),
+            }
+            for file_uri in files
+        ]
+
     except Exception as e:
         return render(
             request,
@@ -271,7 +286,7 @@ def browse_storage_view(request, mapping_id=None):
             "mapping": mapping,
             "breadcrumbs": breadcrumbs,
             "directories": directories,
-            "files": files,
+            "files": files_with_status,
             "current_path": relative_path,
             "extensions": extensions_input,
             "default_extensions": default_extensions,
@@ -659,8 +674,8 @@ def spectrogram_proxy_view(request):
     except ValueError as e:
         return HttpResponseBadRequest(str(e))
     except RuntimeError as e:
-        response = HttpResponse(f"File is {e}. Retry later.", status=504)
-        response["Retry-After"] = "30"
+        response = HttpResponse(f"File is {e}. Retry later.", status=202)
+        response["Retry-After"] = "5"
         return response
     except Exception as e:
         return HttpResponseBadRequest(f"Error generating spectrogram: {e}")
@@ -939,5 +954,11 @@ def get_or_create_encoded_audio_reader(uri):
             audio_file.status = AudioFile.STATUS.exception_returned
             audio_file.save()
             raise RuntimeError(f"Encoding failed: {e}")
+    else:
+        # File is already encoded, update status if needed
+        if audio_file.status != AudioFile.STATUS.encoded:
+            audio_file.status = AudioFile.STATUS.encoded
+            audio_file.zarr_uri = zarr_uri
+            audio_file.save()
 
     return AudioReader(zarr_uri, storage_options=fs_output.storage_options)

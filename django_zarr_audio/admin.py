@@ -41,13 +41,20 @@ class AudioFileAdmin(admin.ModelAdmin):
     list_display = (
         "uri",
         "status",
+        "duration_seconds",
         "storage_mapping",
-        "zarr_uri",
         "created",
         "modified",
     )
     list_filter = ("status",)
     search_fields = ("uri", "zarr_uri")
     raw_id_fields = ("storage_mapping",)
-    readonly_fields = ("created", "modified")
+    readonly_fields = ("created", "modified", "duration_seconds")
     ordering = ("-created",)
+
+    def get_readonly_fields(self, request, obj=None):
+        # Make duration_seconds readonly if it's already set
+        if obj and obj.duration_seconds:
+            return self.readonly_fields
+        # Allow editing if not set yet
+        return ("created", "modified")

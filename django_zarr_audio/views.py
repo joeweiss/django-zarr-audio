@@ -11,7 +11,7 @@ import soundfile as sf
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET
 from zarr_audio.encoder import AudioEncoder
@@ -83,9 +83,15 @@ def audio_proxy_view(request):
     except ValueError as e:
         return HttpResponseBadRequest(str(e))
     except RuntimeError as e:
-        response = HttpResponse(f"File is {e}. Retry later.", status=202)
-        response["Retry-After"] = "5"
-        return response
+        error_msg = str(e)
+        # Only return 202 for queued/encoding status, not for actual errors
+        if error_msg in ("queued", "encoding"):
+            response = HttpResponse(f"File is {e}. Retry later.", status=202)
+            response["Retry-After"] = "5"
+            return response
+        else:
+            # Actual encoding error
+            return HttpResponseBadRequest(f"Encoding error: {e}")
     except Exception as e:
         return HttpResponseBadRequest(f"Error reading encoded segment: {e}")
 
@@ -251,17 +257,30 @@ def browse_storage_view(request, mapping_id=None):
             is_truncated = True
             files = files[:MAX_FILES]
 
-        # Get encoding status for files
+        # Get encoding status and duration for files
         from .models import AudioFile
         file_uris = {f for f in files}
-        audio_files = AudioFile.objects.filter(uri__in=file_uris).only('uri', 'status')
-        file_status_map = {af.uri: af.status for af in audio_files}
+        audio_files = AudioFile.objects.filter(uri__in=file_uris).only('uri', 'status', 'duration_seconds')
+        file_info_map = {af.uri: {'status': af.status, 'duration': af.duration_seconds} for af in audio_files}
 
-        # Attach status to each file
+        # Attach status and duration to each file
+        def format_duration(seconds):
+            if seconds is None:
+                return None
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            if hours > 0:
+                return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+            else:
+                return f"{minutes:02d}:{secs:02d}"
+
         files_with_status = [
             {
                 'uri': file_uri,
-                'status': file_status_map.get(file_uri),
+                'name': file_uri.split('/')[-1],
+                'status': file_info_map.get(file_uri, {}).get('status'),
+                'duration': format_duration(file_info_map.get(file_uri, {}).get('duration')),
             }
             for file_uri in files
         ]
@@ -674,9 +693,15 @@ def spectrogram_proxy_view(request):
     except ValueError as e:
         return HttpResponseBadRequest(str(e))
     except RuntimeError as e:
-        response = HttpResponse(f"File is {e}. Retry later.", status=202)
-        response["Retry-After"] = "5"
-        return response
+        error_msg = str(e)
+        # Only return 202 for queued/encoding status, not for actual errors
+        if error_msg in ("queued", "encoding"):
+            response = HttpResponse(f"File is {e}. Retry later.", status=202)
+            response["Retry-After"] = "5"
+            return response
+        else:
+            # Actual encoding error
+            return HttpResponseBadRequest(f"Encoding error: {e}")
     except Exception as e:
         return HttpResponseBadRequest(f"Error generating spectrogram: {e}")
 
@@ -947,18 +972,86 @@ def get_or_create_encoded_audio_reader(uri):
                 chunk_duration=chunk_duration,
             )
             encoder.encode()
+
+            # Get duration from the encoded zarr file
+            try:
+                reader = AudioReader(zarr_uri, storage_options=fs_output.storage_options)
+                info = reader.info()
+                audio_file.duration_seconds = info.get('duration_sec')
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to get duration for {uri}: {e}")
+                pass  # If we can't get duration, leave it null
+
             audio_file.status = AudioFile.STATUS.encoded
             audio_file.zarr_uri = zarr_uri
             audio_file.save()
         except Exception as e:
             audio_file.status = AudioFile.STATUS.exception_returned
             audio_file.save()
-            raise RuntimeError(f"Encoding failed: {e}")
+            error_msg = str(e)
+            # Provide clearer error message for common issues
+            if "Format not recognised" in error_msg or "does not appear to be an audio file" in error_msg:
+                raise RuntimeError("File encoding failed. The file may be corrupted or the requested time range may be invalid.")
+            else:
+                raise RuntimeError(f"Encoding failed: {e}")
     else:
-        # File is already encoded, update status if needed
+        # File is already encoded, update status and duration if needed
+        reader = AudioReader(zarr_uri, storage_options=fs_output.storage_options)
+
+        needs_update = False
+
         if audio_file.status != AudioFile.STATUS.encoded:
             audio_file.status = AudioFile.STATUS.encoded
             audio_file.zarr_uri = zarr_uri
+            needs_update = True
+
+        if audio_file.duration_seconds is None:
+            try:
+                info = reader.info()
+                audio_file.duration_seconds = info.get('duration_sec')
+                needs_update = True
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to get duration for {uri}: {e}")
+                pass
+
+        if needs_update:
             audio_file.save()
 
+        return reader
+
+    # Should not reach here, but return reader if we somehow do
     return AudioReader(zarr_uri, storage_options=fs_output.storage_options)
+
+
+@login_required
+def file_info_view(request):
+    """
+    Returns metadata about an audio file, including duration.
+    GET params: uri
+    Returns JSON with duration_seconds if available.
+    """
+    uri = request.GET.get("uri")
+    if not uri:
+        return JsonResponse({"error": "Missing uri parameter"}, status=400)
+
+    mapping = get_storage_mapping_for_uri(uri)
+    if not mapping:
+        return JsonResponse({"error": "Unauthorized or unmapped URI prefix"}, status=403)
+
+    try:
+        audio_file = AudioFile.objects.get(uri=uri, storage_mapping=mapping)
+        return JsonResponse({
+            "uri": audio_file.uri,
+            "status": audio_file.status,
+            "duration_seconds": audio_file.duration_seconds,
+        })
+    except AudioFile.DoesNotExist:
+        return JsonResponse({
+            "uri": uri,
+            "status": None,
+            "duration_seconds": None,
+        })

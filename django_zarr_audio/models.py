@@ -95,6 +95,12 @@ class AudioFile(TimeStampedModel, StatusModel):
         help_text="Full output URI where the encoded Zarr archive was written",
     )
 
+    duration_seconds = models.FloatField(
+        blank=True,
+        null=True,
+        help_text="Duration of the audio file in seconds",
+    )
+
     def __str__(self):
         return self.uri
 
